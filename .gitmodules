@@ -1,0 +1,3 @@
+[submodule "jyy-os-workbench"]
+	path = jyy-os-workbench
+	url = git@github.com:TzashiNorpu/jyy-os-workbench.git
