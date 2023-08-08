@@ -16,6 +16,7 @@ from typing import Callable, Generator
 ## 1. Mosaic system calls
 
 ### 1.1 Process, thread, and context switching
+#### lambda 表示匿名函数
 
 sys_fork = lambda: os.sys_fork()
 sys_spawn = lambda fn, *args: os.sys_spawn(fn, *args)
@@ -27,7 +28,7 @@ sys_choose = lambda choices: os.sys_choose(choices)
 sys_write = lambda *args: os.sys_write(*args)
 
 ### 1.3 Virtual block storage device
-
+#### bread：block read
 sys_bread = lambda k: os.sys_bread(k)
 sys_bwrite = lambda k, v: os.sys_bwrite(k, v)
 sys_sync = lambda: os.sys_sync()
@@ -45,9 +46,12 @@ def syscall(func):  # @syscall decorator
 
 ### 2.1 Data structures
 
+# 定义了一个名为 Heap 的类。这个类没有任何成员，但是它的实例可以用作堆。
+# 实例的字典是堆，因此可以使用 self.__dict__ 访问堆的内容
 class Heap:
     pass  # no member: self.__dict__ is the heap
 
+# 多个线程的 heap 可能是共享的。但是每个线程都有私有的 context，可以认为是栈【用生成器 yield 的特性来模拟出入栈】
 @dataclass
 class Thread:
     context: Generator  # program counter, local variables, etc.
@@ -169,6 +173,8 @@ class OperatingSystem:
         # Operating system states
         self._threads = [Thread(context=init(), heap=Heap())]
         self._current = 0
+        # 一开始的初始化为 None -> step 中第一次执行时返回为 None
+        # 一开始调用时是函数入口 main，不是因为 yield 进行系统调用而被进行任务调度
         self._choices = {init.__name__: lambda: None}
         self._stdout = ''
         self._storage = Storage(persist={}, buf={})
@@ -299,22 +305,28 @@ class OperatingSystem:
         return dict(enumerate(crash_sites))
 
 ### 2.4 Operating system as a state machine
-
+    # 执行完系统调用列表，执行用户代码到下一个系统调用，返回所有线程的状态
     def replay(self, trace: list) -> dict:
         """Replay an execution trace and return the resulting state."""
         for choice in trace:
             self._step(choice)
         return self.state_dump()
-
+    # 执行当前系统调用，恢复用户程序执行到下一个系统调用【记录这个系统调用】
     def _step(self, choice, fork_child=False):
         self._switch_to(self._current)
         self._trace.append(choice)  # keep all choices for replay-based fork()
         action = self._choices[choice]  # return value of sys_xxx: a lambda
+        # 执行系统调用
         res = action()
 
         try:  # Execute current thread for one step
+            # 执行用户代码到下一次系统调用
+            # context 是 Generator -> 可以 send 继续执行到下一次 SYSCALLS
             func, args = self.current().context.send(res)
             assert func in SYSCALLS
+            # 内置函数，用于获取对象的属性。它接受两个参数：对象和属性名称。如果对象具有该属性，则返回该属性的值；否则，引发 AttributeError 异常
+            # 执行系统调用，拿到系统调用对应的 lambda 匿名函数
+            # sys_spawn 的返回值是 {'spawn': (lambda: do_spawn())}
             self._choices = getattr(self, func)(*args)
         except StopIteration:  # ... and thread terminates
             self._choices = self.sys_sched()
@@ -324,17 +336,22 @@ class OperatingSystem:
         # and outgoing transitions are saved in self._choices.
 
 ### 2.5 Misc and helper functions
-
+    # 所有线程的快照
     def state_dump(self) -> dict:
         """Create a serializable Mosaic state dump with hash code."""
         heaps = {}
         for th in self._threads:
+            # id() 函数是一个内置函数，用于返回对象的唯一标识符。标识符是一个整数，它代表对象的内存地址
+            # id() 函数通常用于检查两个变量或对象是否引用同一内存位置1
             if (i := id(th.heap)) not in heaps:  # unique heaps
                 heaps[i] = len(heaps) + 1
-
         os_state = {
             'current': self._current,
             'choices': sorted(list(self._choices.keys())),
+            # 使用列表推导式创建一个字典列表。
+            # 字典包含线程当前执行的函数的名称、线程堆的 ID、函数的当前行号和函数的本地变量。
+            # 如果线程没有在执行函数，则将 None 添加到列表中，而不是字典【字典是{ 'name':...}】
+            # th.context 是生成器，因此有 gi_frame 属性
             'contexts': [
                 {
                     'name': th.context.gi_frame.f_code.co_name,
@@ -345,6 +362,7 @@ class OperatingSystem:
                     for th in self._threads
             ],
             'heaps': {
+                # 线程 heap id : 该 heap 内的字典
                 heaps[id(th.heap)]: th.heap.__dict__
                     for th in self._threads
             },
@@ -354,6 +372,7 @@ class OperatingSystem:
         }
 
         h = hash(json.dumps(os_state, sort_keys=True)) + 2**63
+        # 增加 hashcode 属性
         return (copy.deepcopy(os_state)  # freeze the runtime state
                 | dict(hashcode=f'{h:016x}'))
 
@@ -363,7 +382,9 @@ class OperatingSystem:
 
     def _switch_to(self, tid: int):
         self._current = tid
+        # globals()['os'] 是不是不会变化 ?
         globals()['os'] = self
+        # 切换线程栈
         globals()['heap'] = self.current().heap
         if tid in self._newfork:
             self._newfork.remove(tid)  # tricky: forked process must receive 0
@@ -400,11 +421,16 @@ class Mosaic:
     def run(self) -> dict:
         """Interpret the model with non-deterministic choices."""
         os = OperatingSystem(self.entry)
+        # V 状态里添加 depth 属性
         V, E = [os.state_dump() | dict(depth=0)], []
-
+        # V[-1] -> V 列表最后一个元素
+        # choices ： 当前仍未执行完的所有任务
         while (choices := V[-1]['choices']):
             choice = random.choice(choices)  # uniformly at random
+            # os.replay([choice]) 返回执行完 choice 系统调用后的线程状态
+            # V[] 最后一个元素是最新的所有线程的线程状态 ： V[] 系统线程指向状态登记簿
             V.append(os.replay([choice]) | dict(depth=len(V)))
+            # 当前 choice 对应的线程 hashcode 为 V[-2]['hashcode']；下一个线程为 V[-1]['hashcode']
             E.append((V[-2]['hashcode'], V[-1]['hashcode'], choice))
 
         return dict(source=self.src, vertices=V, edges=E)
@@ -444,14 +470,31 @@ class Mosaic:
         )
 
 ### 3.1 Source code parsing and rewriting
-
+    """
+    继承自 ast.NodeTransformer。它重写了 visit_Call() 方法，以便在遍历 AST 时对其进行转换。
+    如果 node.func.id 是 SYSCALLS 中的一个系统调用，则将其重写为生成器表达式，返回一个元组，
+    其中第一个元素是字符串 'sys_xxx'，第二个元素是参数列表
+    """
     class Transformer(ast.NodeTransformer):
+        """
+        visit_Call() 方法是 ast.NodeTransformer 类的一个方法，用于遍历 AST 并对树中的任何 Call 节点应用转换。
+        当遍历到一个 Call 节点时，该方法会被调用
+        Call 节点是 AST 中的一个节点类型，表示函数调用。它包含函数名、参数列表和关键字参数列表。
+        """
         def visit_Call(self, node):
             # Rewrite system calls as yields
+            # isinstance() 是 Python 的一个内置函数，用于检查一个对象是否是一个特定类的实例。如果是，则返回 True，否则返回 False
+            # node.func 是否是 ast.Name 类的实例:node.func 和 ast.Name 都是继承自 expr 类型
+            # print("nodex:",node.func.id)
             if (isinstance(node.func, ast.Name) and
                     node.func.id in SYSCALLS):  # rewrite system calls
+                # range 不会进入这里
+                # print("nodew:",node.func.id)
                 return ast.Yield(ast.Tuple(     #   -> yield ('sys_xxx', args)
+                    # ast.Tuple -> AST 树中元组类型的节点
+                    # 给 ast.Tuple 类型对象的 elts 属性赋值
                     elts=[
+                        # 常量节点 + 元组节点类型
                         ast.Constant(value=node.func.id),
                         ast.Tuple(elts=node.args),
                     ]
@@ -461,13 +504,22 @@ class Mosaic:
 
     def __init__(self, src: str):
         tree = ast.parse(src)
+        # visit 遍历 AST 的时候会调用 visit_Call 方法
         hacked_ast = self.Transformer().visit(tree)
+        # hacked_src 里系统调用已经被替换
         hacked_src = ast.unparse(hacked_ast)
+        # print("hacked_src:",hacked_src)
+        # print("hacked_src src:",src)
 
         context = {}
+        # print("test0:",globals())
         exec(hacked_src, globals(), context)
+        # print("test1:",globals())
+        # context print: {'T': 3, 'Tsum': <function Tsum at 0x7efc049092d0>, 'main': <function main at 0x7efc04951990>}
+        # print("context print:",context)
+        # 把 context 添加到 globals 中
         globals().update(context)
-
+        # print("test2:",globals())
         self.src = src
         self.entry = context['main']  # must have a main()
 
@@ -482,10 +534,12 @@ if __name__ == '__main__':
         help='application code (.py) to be checked; must have a main()'
     )
     parser.add_argument('-r', '--run', action='store_true')
+    # 给 args 添加 check 属性，命令行中如果指定了 -c 和 --checked， args.check 属性为真，store_true：check 属性是布尔类型
     parser.add_argument('-c', '--check', action='store_true')
     args = parser.parse_args()
 
     src = Path(args.source).read_text()
+    # print("haha:",src)
     mosaic = Mosaic(src)
     if args.check:
         explored = mosaic.check()
