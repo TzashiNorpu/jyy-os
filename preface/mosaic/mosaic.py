@@ -234,6 +234,7 @@ class OperatingSystem:
         """Return a non-deterministic context switch to a runnable thread."""
         return {
             f't{i+1}': (lambda i=i: self._switch_to(i))
+                # 迭代 _threads , 构造所有不为空的线程的调度 lambda
                 for i, th in enumerate(self._threads)
                     if th.context.gi_frame is not None  # thread still alive?
         }
@@ -243,7 +244,13 @@ class OperatingSystem:
     @syscall
     def sys_choose(self, choices):
         """Return a non-deterministic value from choices."""
+        # Python字典推导式，它返回一个字典，其中键是形如“choose {c}”的字符串，其中{c}是列表choices的元素
+        # 字典的值是lambda函数，它返回相应的choices元素
+        # lambda函数用于创建一个不带参数并返回c值的匿名函数
+        # 使用c=c语法将当前的c值绑定到lambda函数中。这是必要的，否则所有lambda函数都将在循环中返回c的最后一个值。
         return {f'choose {c}': (lambda c=c: c) for c in choices}
+        # return {f'choose {c}': (lambda c: c)(c) for c in choices}
+
 
     @syscall
     def sys_write(self, *args):
