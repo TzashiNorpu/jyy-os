@@ -1,4 +1,5 @@
 for i in $(seq 1 1000)
 do
-  ./mosaic.py sum.py | grep SUM | grep stdout >> result.txt
+  ./mosaic.py sum.py | grep SUM | grep stdout >> result.txt 
 done
+cat result.txt | sort | uniq

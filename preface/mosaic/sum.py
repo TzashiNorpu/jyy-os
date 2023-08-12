@@ -1,10 +1,14 @@
 T = 3
 
 def Tsum():
-  for _ in range(3):
+  for _ in range(T):
+    # 模拟读写非原子【并发模拟】
+    # read
     tmp = heap.x
     tmp +=1
+    # schedule
     sys_sched()
+    # write
     heap.x = tmp
     sys_sched()
   heap.done += 1

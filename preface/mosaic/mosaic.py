@@ -192,6 +192,7 @@ class OperatingSystem:
     def sys_spawn(self, func: Callable, *args):
         """Spawn a heap-sharing new thread executing func(args)."""
         def do_spawn():
+            # 创建新线程：func是新线程要执行的函数
             self._threads.append(
                 Thread(
                     context=func(*args),  # func() returns a new generator
@@ -211,6 +212,7 @@ class OperatingSystem:
             # the entire trace and override the last fork() to avoid infinite
             # recursion.
             os_clone = OperatingSystem(self._init)
+            # 重放所有的 _trace 日志
             os_clone.replay(self._trace[:-1])
             os_clone._step(self._trace[-1], fork_child=True)
 
@@ -333,7 +335,7 @@ class OperatingSystem:
             assert func in SYSCALLS
             # 内置函数，用于获取对象的属性。它接受两个参数：对象和属性名称。如果对象具有该属性，则返回该属性的值；否则，引发 AttributeError 异常
             # 执行系统调用，拿到系统调用对应的 lambda 匿名函数
-            # sys_spawn 的返回值是 {'spawn': (lambda: do_spawn())}
+            # sys_spawn 函数的返回值是 {'spawn': (lambda: do_spawn())}
             self._choices = getattr(self, func)(*args)
         except StopIteration:  # ... and thread terminates
             self._choices = self.sys_sched()
@@ -389,7 +391,7 @@ class OperatingSystem:
 
     def _switch_to(self, tid: int):
         self._current = tid
-        # globals()['os'] 是不是不会变化 ?
+        # globals()['os'] 在 --check 是会变化
         globals()['os'] = self
         # 切换线程栈
         globals()['heap'] = self.current().heap
