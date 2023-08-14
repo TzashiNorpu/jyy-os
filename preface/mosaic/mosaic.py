@@ -171,6 +171,7 @@ class OperatingSystem:
     def __init__(self, init: Callable):
         """Create a new OS instance with pending-to-execute init thread."""
         # Operating system states
+        # init() -> 启动 generator 的状态机 【 generator 语法】
         self._threads = [Thread(context=init(), heap=Heap())]
         self._current = 0
         # 一开始的初始化为 None -> step 中第一次执行时返回为 None
@@ -325,17 +326,18 @@ class OperatingSystem:
         self._switch_to(self._current)
         self._trace.append(choice)  # keep all choices for replay-based fork()
         action = self._choices[choice]  # return value of sys_xxx: a lambda
-        # 执行系统调用
+        # 【执行系统调用】 or main 函数
         res = action()
 
         try:  # Execute current thread for one step
-            # 执行用户代码到下一次系统调用
+            # 【执行用户代码】到下一次系统调用
             # context 是 Generator -> 可以 send 继续执行到下一次 SYSCALLS
             func, args = self.current().context.send(res)
             assert func in SYSCALLS
             # 内置函数，用于获取对象的属性。它接受两个参数：对象和属性名称。如果对象具有该属性，则返回该属性的值；否则，引发 AttributeError 异常
             # 执行系统调用，拿到系统调用对应的 lambda 匿名函数
             # sys_spawn 函数的返回值是 {'spawn': (lambda: do_spawn())}
+            # 【保存下一个系统调用】func 即是下一个系统调用
             self._choices = getattr(self, func)(*args)
         except StopIteration:  # ... and thread terminates
             self._choices = self.sys_sched()
@@ -391,7 +393,7 @@ class OperatingSystem:
 
     def _switch_to(self, tid: int):
         self._current = tid
-        # globals()['os'] 在 --check 是会变化
+        # globals()['os'] 在 --check 时会变化
         globals()['os'] = self
         # 切换线程栈
         globals()['heap'] = self.current().heap
@@ -436,8 +438,7 @@ class Mosaic:
         # choices ： 当前仍未执行完的所有任务
         while (choices := V[-1]['choices']):
             choice = random.choice(choices)  # uniformly at random
-            # os.replay([choice]) 返回执行完 choice 系统调用后的线程状态
-            # V[] 最后一个元素是最新的所有线程的线程状态 ： V[] 系统线程指向状态登记簿
+            # os.replay([choice]) 返回执行完 choice 系统调用到下一次系统调用时的线程状态
             V.append(os.replay([choice]) | dict(depth=len(V)))
             # 当前 choice 对应的线程 hashcode 为 V[-2]['hashcode']；下一个线程为 V[-1]['hashcode']
             E.append((V[-2]['hashcode'], V[-1]['hashcode'], choice))
@@ -459,12 +460,14 @@ class Mosaic:
                 st = State(self.trace + (c,))
                 st.state = st.state | dict(depth=self.state['depth'] + 1)
                 return st
-
+        # state 实例只有一个
         st0 = State(tuple())  # initial state of empty trace
         queued, V, E = [st0], {st0.hashcode: st0.state}, []
 
         while queued:
             st = queued.pop(0)
+            # 构建全量的线程调度/切换DAG
+            # sys_sched 时重新回放从根函数到当前 _threads 的所有执行路径 -> BFS
             for choice in st.state['choices']:
                 st1 = st.extend(choice)
                 if st1.hashcode not in V:  # found an unexplored state
