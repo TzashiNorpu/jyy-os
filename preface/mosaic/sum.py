@@ -1,4 +1,4 @@
-T = 3
+T = 1
 
 def Tsum():
   for _ in range(T):
@@ -7,6 +7,7 @@ def Tsum():
     tmp = heap.x
     tmp +=1
     # schedule
+    # print("I\'m Tsum")
     sys_sched()
     # write
     heap.x = tmp
@@ -14,6 +15,7 @@ def Tsum():
   heap.done += 1
 
 def main():
+  # print("I\'m main")
   heap.x = 0
   heap.done = 0
   
@@ -21,6 +23,7 @@ def main():
     sys_spawn(Tsum)
   
   while heap.done != T:
+    # print("Hello")
     sys_sched()
   
   sys_write(f'SUM = {heap.x}')

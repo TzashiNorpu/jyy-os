@@ -327,11 +327,13 @@ class OperatingSystem:
         self._trace.append(choice)  # keep all choices for replay-based fork()
         action = self._choices[choice]  # return value of sys_xxx: a lambda
         # 【执行系统调用】 or main 函数
+        # sys_sched 返回的 lambda 也在这里执行：进行上下文切换
         res = action()
 
         try:  # Execute current thread for one step
             # 【执行用户代码】到下一次系统调用
             # context 是 Generator -> 可以 send 继续执行到下一次 SYSCALLS
+            # sys_sched 上下文切换后开始执行业务代码
             func, args = self.current().context.send(res)
             assert func in SYSCALLS
             # 内置函数，用于获取对象的属性。它接受两个参数：对象和属性名称。如果对象具有该属性，则返回该属性的值；否则，引发 AttributeError 异常
@@ -462,6 +464,7 @@ class Mosaic:
                 return st
         # state 实例只有一个
         st0 = State(tuple())  # initial state of empty trace
+        # queued 启动状态机 -> 入口是 main 函数，此时还未执行
         queued, V, E = [st0], {st0.hashcode: st0.state}, []
 
         while queued:
@@ -469,10 +472,19 @@ class Mosaic:
             # 构建全量的线程调度/切换DAG
             # sys_sched 时重新回放从根函数到当前 _threads 的所有执行路径 -> BFS
             for choice in st.state['choices']:
+                # st1 里有下一个要执行的系统调用
                 st1 = st.extend(choice)
-                if st1.hashcode not in V:  # found an unexplored state
-                    V[st1.hashcode] = st1.state
-                    queued.append(st1)
+                """
+                    main -> spawn -> spawn -> sched
+                    此时主线程的执行状态为 [main -> spawn -> spawn -> sched)：从main开始执行，执行了两次spawn，然后执行到了sched之前【sched没有执行】
+                    进行重放时的运行步骤为：[main -> spawn -> spawn -> sched]:从main开始执行，执行了两次spawn，一次sched，在第二次sched前停下【重放会打印两次Hello】
+                    因此当前线程有多个需要进行重放时，且主线程处于while循环的过程中没有修改状态时：主线程的重放和主线程当前的状态是重复的，需要进行去重【同步的一种实现】
+                """
+                # if st1.hashcode not in V:  # found an unexplored state
+                #     V[st1.hashcode] = st1.state
+                #     queued.append(st1)
+                V[st1.hashcode] = st1.state
+                queued.append(st1)
                 E.append((st.hashcode, st1.hashcode, choice))
 
         return dict(
