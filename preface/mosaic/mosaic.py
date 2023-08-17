@@ -480,11 +480,19 @@ class Mosaic:
                     进行重放时的运行步骤为：[main -> spawn -> spawn -> sched]:从main开始执行，执行了两次spawn，一次sched，在第二次sched前停下【重放会打印两次Hello】
                     因此当前线程有多个需要进行重放时，且主线程处于while循环的过程中没有修改状态时：主线程的重放和主线程当前的状态是重复的，需要进行去重【同步的一种实现】
                 """
-                # if st1.hashcode not in V:  # found an unexplored state
-                #     V[st1.hashcode] = st1.state
-                #     queued.append(st1)
-                V[st1.hashcode] = st1.state
-                queued.append(st1)
+                if st1.hashcode not in V:  # found an unexplored state
+                    V[st1.hashcode] = st1.state
+                    queued.append(st1)
+                """ 
+                    如果不进行去重： 在 while heap.done != T:  sys_sched() 处进行调度时
+                    第一次调度的是本线程 -> 调度后虽然会多执行一步，但是因为不满足 while 条件，下一次要执行
+                    的还是 sys_sched()，且因为这条调度流程多执行的一步没有修改上下文，因此 hash 码还是一样的
+                    如果还在这条分支上进行调度 -> 还是不满足 while 条件【状态机的遍历是每次从初始状态选择一个分支进行执行，这个
+                    分支上每一步的执行需要进行上下文的一定的，不然状态机就会进入死循环】
+                    状态机的模拟：每次有任务切换都是重放，都是基于重放时的上一个状态来的，和其他的分支没有关系
+                """
+                # V[st1.hashcode] = st1.state
+                # queued.append(st1)
                 E.append((st.hashcode, st1.hashcode, choice))
 
         return dict(
